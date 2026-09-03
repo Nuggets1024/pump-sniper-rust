@@ -1,0 +1,84 @@
+# 复制为 config.toml，不要提交真实密钥。
+# cp config.example.toml config.toml
+# solana-keygen new -o keypair.json --no-bip39-passphrase
+# chmod 600 config.toml keypair.json
+
+[bot]
+# standard：保持长期监听/跟盘；scan：锁定首个可买 create，之后只处理该 mint。
+mode = "standard"
+# 是否真实执行买卖；首次运行建议保持 false。
+trade = false
+
+[admin]
+# 本地管理页；部署服务器时建议保持 127.0.0.1，然后用 SSH 隧道访问。
+enabled = true
+bind = "127.0.0.1:8787"
+# 暴露公网前必须填写长随机 token。
+auth_token = ""
+
+[log]
+filter = "pump_sniper=info"
+directory = "logs"
+
+[rpc]
+url = "https://your-solana-rpc.example"
+commitment = "processed"
+
+[geyser]
+# 永远只配置一个 endpoint；程序内部固定开两条连接：
+# 主连接监听 CREATE/follow，目标连接监听当前 mint 交易。
+endpoint = "https://your-yellowstone-grpc.example"
+x_token = ""
+commitment = "processed"
+reconnect_ms = 500
+
+[wallet]
+keypair_path = "keypair.json"
+
+[landing]
+# 所有 route 发送同一份签名；需要专用落地服务时，在这里追加已配置好密钥的 route。
+routes = [
+  { name = "solana-rpc", provider = "rpc", endpoint = "https://your-solana-rpc.example" },
+]
+max_inflight_orders = 8
+confirmation_timeout_ms = 5_000
+# 仅 LandX 明文 HTTP 需要开启；优先使用 HTTPS 或 UDP。
+allow_insecure_http = false
+skip_preflight = true
+cu_limit = 95_000
+# 95k CU × 11,578,947 micro-lamports/CU = 最多约 0.0011 SOL 优先费。
+cu_price_micro_lamports = 11_578_947
+jito_dont_front = true
+lighthouse_slot_guard = true
+lighthouse_slot_slack = 12
+# 所有 route 的 tip 总预算；仅 RPC route 时保持 0。
+max_total_tip_lamports = 0
+
+[buy]
+sol_amount = 0.05
+# 3000 = 最大 30% 滑点。
+max_slippage_bps = 3_000
+use_seed_token_account = true
+
+[sell]
+follow_creator_sell = true
+max_hold_ms = 8_000
+# 紧急退出策略，1 表示基本不限制卖出回款。
+min_sol_out_lamports = 1
+
+[[follow]]
+address = "PUT_DEV_WALLET_HERE"
+min_sol = 0.1
+max_sol = 5.0
+
+# scan 模式不能配置 [[follow]]；请删除上面的 follow 段，并开启 bot.trade。
+
+[blacklist]
+mints = []
+creators = []
+
+# 专用落地 route 示例（按供应商要求填写并加入 landing.routes）：
+# { name = "0slot", provider = "zero_slot", endpoint = "https://ny.0slot.trade", api_key = "...", tip_lamports = 1000000 }
+# { name = "temporal", provider = "temporal", endpoint = "https://nozomi.temporal.xyz", api_key = "...", tip_lamports = 1000000 }
+# { name = "astralane", provider = "astralane", endpoint = "https://edge.astralane.io", api_key = "...", tip_lamports = 1000000, mev_protect = true }
+# { name = "landx", provider = "landx", transport = "udp", endpoint = "ams1.landx.dev", api_key = "123456789012", tip_lamports = 1000000 }

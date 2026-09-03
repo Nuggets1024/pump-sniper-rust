@@ -1,0 +1,11 @@
+/target
+/admin-ui/node_modules
+/admin-ui/dist
+/docs
+/logs
+/config.toml
+/keypair.json
+/nonce-keypair.json
+.DS_Store
+*.pem
+.env

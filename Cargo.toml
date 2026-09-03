@@ -1,0 +1,61 @@
+[package]
+name = "pump-sniper"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+description = "高性能 Pump.fun 跟盘狙击"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "pump-sniper"
+path = "src/main.rs"
+
+[[example]]
+name = "probe-geyser"
+path = "examples/probe_geyser.rs"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+axum = "0.7"
+clap = { version = "4", features = ["derive"] }
+base64 = "0.22"
+bincode = "1"
+bs58 = "0.5"
+bytes = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+dashmap = "6"
+futures = "0.3"
+parking_lot = "0.12"
+rand = "0.8"
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+solana-client = "2.2"
+solana-rpc-client = "2.2"
+solana-sdk = "2.2"
+solana-transaction-status = "2.2"
+spl-associated-token-account = "6"
+spl-token = "7"
+spl-token-2022 = "6"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "chrono", "local-time"] }
+unicode-width = "0.2"
+yellowstone-grpc-client = "6.1"
+yellowstone-grpc-proto = "6.1"
+zeroize = { version = "1", features = ["derive"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3
+panic = "abort"
+
+[profile.dev]
+opt-level = 1

@@ -1,0 +1,21 @@
+//! Pump.fun 跟盘狙击库：监听、策略、买卖组包与上链。
+
+pub mod admin;
+pub mod config;
+pub mod constants;
+pub mod display;
+pub mod error;
+pub mod exec;
+pub mod journal;
+pub mod listen;
+pub mod pda;
+pub mod position;
+pub mod price;
+pub mod pump;
+pub mod rpc;
+pub mod strategy;
+pub mod telemetry;
+pub mod tip_accounts;
+#[path = "engine.rs"]
+pub mod trading;
+pub mod wallet;
