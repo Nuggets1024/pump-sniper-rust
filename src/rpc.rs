@@ -5,10 +5,10 @@
 //! construction before any landing provider is reached.
 
 use reqwest::Client;
+use solana_commitment_config::CommitmentConfig;
 use solana_rpc_client::http_sender::HttpSender;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient as AsyncRpcClient;
 use solana_rpc_client::rpc_client::{RpcClient, RpcClientConfig};
-use solana_sdk::commitment_config::CommitmentConfig;
 use std::time::Duration;
 
 fn http_client(timeout: Duration) -> Client {

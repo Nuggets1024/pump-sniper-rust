@@ -18,6 +18,8 @@ pub struct AppConfig {
     pub log: LogCfg,
     pub rpc: RpcCfg,
     pub geyser: GeyserCfg,
+    #[serde(default)]
+    pub shred: ShredCfg,
     pub wallet: WalletCfg,
     pub landing: LandingCfg,
     pub buy: BuyCfg,
@@ -111,11 +113,32 @@ pub struct GeyserCfg {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct GeyserSourceCfg {
-    /// 稳定来源编号（0..62），避免重排后 cursor 错配。
+    /// 稳定来源编号（0..61）；62 保留给 ShredStream，63 保留给 RPC repair。
     pub id: u8,
     pub endpoint: String,
     #[serde(default)]
     pub x_token: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShredCfg {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_shred_endpoint")]
+    pub endpoint: String,
+    #[serde(default = "default_reconnect")]
+    pub reconnect_ms: u64,
+}
+
+impl Default for ShredCfg {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: default_shred_endpoint(),
+            reconnect_ms: default_reconnect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -288,6 +311,17 @@ impl AppConfig {
                 "geyser.endpoint 与 geyser.sources 只能配置一个".into(),
             ));
         }
+        if self.shred.enabled {
+            let endpoint = self.shred.endpoint.trim();
+            if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
+                return Err(SniperError::Config(
+                    "shred.endpoint 必须以 http:// 或 https:// 开头".into(),
+                ));
+            }
+            if self.shred.reconnect_ms == 0 {
+                return Err(SniperError::Config("shred.reconnect_ms 必须大于 0".into()));
+            }
+        }
         if self.bot.mode == BotMode::Scan && !self.bot.trade {
             return Err(SniperError::Config(
                 "bot.mode=scan 必须开启 bot.trade".into(),
@@ -302,9 +336,10 @@ impl AppConfig {
         let mut source_endpoints = HashSet::new();
         for source in self.geyser_sources() {
             let id = source.id;
-            if id >= 63 {
+            if id >= 62 {
                 return Err(SniperError::Config(
-                    "geyser.sources[].id 必须在 0..62，63 保留给RPC回补".into(),
+                    "geyser.sources[].id 必须在 0..61；62 保留给ShredStream，63保留给RPC回补"
+                        .into(),
                 ));
             }
             if !source_ids.insert(id) {
@@ -584,6 +619,9 @@ fn default_log_dir() -> String {
 }
 fn default_reconnect() -> u64 {
     500
+}
+fn default_shred_endpoint() -> String {
+    "http://127.0.0.1:10800".into()
 }
 fn default_cu_limit() -> u32 {
     95_000

@@ -2,7 +2,7 @@
 name = "pump-sniper"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.89"
+rust-version = "1.91"
 description = "高性能 Pump.fun 跟盘狙击"
 license = "MIT"
 publish = false
@@ -29,18 +29,31 @@ dashmap = "6"
 futures = "0.3"
 parking_lot = "0.12"
 rand = "0.8"
-reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-solana-account-decoder = "2.2"
-solana-client = "2.2"
-solana-rpc-client = "2.2"
-solana-rpc-client-api = "2.2"
-solana-sdk = "2.2"
-solana-transaction-status = "2.2"
-spl-associated-token-account = "6"
-spl-token = "7"
-spl-token-2022 = "6"
+solana-client = "=4.2.2"
+solana-account-decoder-client-types = { version = "=4.2.2", features = ["agave-unstable-api"] }
+solana-rpc-client = "=4.2.2"
+solana-rpc-client-api = "=4.2.2"
+solana-sdk = "=4.0.1"
+solana-transaction-status = { version = "=4.2.2", features = ["agave-unstable-api"] }
+solana-transaction-error = { version = "=3.3.2", features = ["wincode"] }
+solana-commitment-config = "=3.1.1"
+solana-entry = { version = "=4.2.2", features = ["agave-unstable-api"] }
+solana-compute-budget-interface = "=3.0.0"
+solana-system-interface = "=3.2.0"
+solana-program-pack = "=3.1.0"
+solana-sysvar = "=4.1.0"
+sol-parser-sdk = "=0.7.1"
+solana-streamer-sdk = "=3.0.1"
+spl-associated-token-account = "=8.0.0"
+spl-token = "=9.0.0"
+spl-token-2022 = "=11.0.0"
+# 强制 five8_core 到 0.1.2，规避 five8 1.0.0 的 DecodeError 与 solana-keypair 3.1.2 的兼容 bug
+five8_core = "=0.1.2"
+# 规避 spl-list-view 0.1.1 与 spl-pod 0.7.2 的类型不兼容
+spl-list-view = "=0.1.0"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
@@ -49,8 +62,9 @@ tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "chrono", "local-time"] }
 unicode-width = "0.2"
-yellowstone-grpc-client = "6.1"
-yellowstone-grpc-proto = "6.1"
+wincode = "=0.5.5"
+yellowstone-grpc-client = "=13.5.0"
+yellowstone-grpc-proto = "=12.7.0"
 zeroize = { version = "1", features = ["derive"] }
 
 [profile.release]

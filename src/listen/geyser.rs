@@ -5,7 +5,7 @@ use crate::pump::{contains_create_instruction, decode_transactions, PumpEvent};
 use crate::strategy::ScanTarget;
 use anyhow::Context;
 use futures::{SinkExt, StreamExt};
-use solana_sdk::commitment_config::CommitmentConfig;
+use solana_commitment_config::CommitmentConfig;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
@@ -684,6 +684,8 @@ fn subscription_request(
                 account_include: accounts,
                 account_exclude: vec![],
                 account_required: required_accounts,
+                cuckoo_account_include: None,
+                token_accounts: None,
             },
         );
     }
@@ -697,6 +699,8 @@ fn subscription_request(
                 account_include: target_accounts,
                 account_exclude: vec![],
                 account_required: vec![],
+                cuckoo_account_include: None,
+                token_accounts: None,
             },
         );
     }

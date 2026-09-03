@@ -222,13 +222,17 @@ function App() {
 
       <main className="grid w-full gap-3 px-5 py-3 xl:px-8">
         <Card shadow="none" className="line-panel">
-          <CardBody className="grid grid-cols-2 divide-x divide-divider p-0 md:grid-cols-3 xl:grid-cols-6">
+          <CardBody className="grid grid-cols-2 divide-x divide-divider p-0 md:grid-cols-4 xl:grid-cols-8">
             <StatusItem icon={Activity} label="Bot" value={isRunning ? "运行中" : "已停止"}
               color={isRunning ? "success" : "danger"} />
             <StatusItem icon={CircleDollarSign} label="余额"
               value={status?.balance_lamports == null ? "-" : `${(status.balance_lamports / 1e9).toFixed(6)} SOL`} />
-            <StatusItem icon={DatabaseZap} label="最新 Slot" value={status?.latest_slot} />
-            <StatusItem icon={Radio} label="连接" value={`${status?.geyser_connections ?? "-"} Geyser`} />
+            <StatusItem icon={DatabaseZap} label="Geyser Slot" value={status?.latest_slot} />
+            <StatusItem icon={Radio} label="数据源"
+              value={`${status?.geyser_connections ?? "-"} Geyser · ${status?.shred_enabled ? "Shred ✓" : "Shred -"}`} />
+            <StatusItem icon={Activity} label="同事件首报"
+              value={`Shred ${status?.feed?.geyser_duplicates ?? 0} / Geyser ${status?.feed?.shred_duplicates ?? 0}`} />
+            <StatusItem icon={DatabaseZap} label="Shred Slot" value={status?.feed?.last_shred_slot} />
             <StatusItem icon={Wallet} label="钱包" value={shortHash(status?.wallet, 9, 7)}
               href={status?.wallet ? `https://gmgn.ai/sol/address/${status.wallet}` : undefined} />
             <StatusItem icon={Server} label="节点" value={status?.geyser_endpoint} />

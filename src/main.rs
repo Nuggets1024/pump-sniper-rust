@@ -1,12 +1,12 @@
 use clap::Parser;
 use pump_sniper::config::{AppConfig, BotMode};
 use pump_sniper::journal::TradeJournal;
-use pump_sniper::listen::{geyser, merge, repair};
+use pump_sniper::listen::{geyser, merge, repair, shred};
 use pump_sniper::strategy::{self, FollowDev, ScanTarget};
 use pump_sniper::telemetry::{self, yn};
 use pump_sniper::trading;
 use pump_sniper::wallet::load_keypair;
-use solana_sdk::commitment_config::CommitmentConfig;
+use solana_commitment_config::CommitmentConfig;
 use solana_sdk::signature::Signer;
 use std::sync::Arc;
 use std::time::Duration;
@@ -105,6 +105,15 @@ async fn main() -> anyhow::Result<()> {
         feed_tx.clone(),
         gap_store.clone(),
     ));
+    if cfg.shred.enabled {
+        let shred_cfg = cfg.shred.clone();
+        let shred_tx = feed_tx.clone();
+        tokio::spawn(async move {
+            if let Err(error) = shred::run(shred_cfg, shred_tx).await {
+                telemetry::error("ShredStream", error.to_string());
+            }
+        });
+    }
     for gap in gap_store.pending() {
         pump_sniper::listen::begin_gap_repair();
         gap_tx

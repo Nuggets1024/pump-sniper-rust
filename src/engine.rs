@@ -185,7 +185,7 @@ pub async fn run(
                     crate::telemetry::error_fields(
                         "失败",
                         [
-                            "核账熔断".to_owned(),
+                            "核账熔断 - 停止后续买入".to_owned(),
                             side.to_owned(),
                             stale.mint.to_string(),
                             stale.signature.clone(),
@@ -707,7 +707,12 @@ fn confirmed_buy_tokens(event: &PumpEvent, wallet: Pubkey) -> Option<u64> {
 }
 
 fn confirmed_sell(event: &PumpEvent, wallet: Pubkey) -> bool {
-    event.sells.iter().any(|sell| sell.wallet == wallet)
+    // Shred Entry 只能证明交易被打包，不能证明执行成功；必须等包含
+    // transaction meta / TradeEvent 的完整事件后才能关闭仓位。
+    event
+        .sells
+        .iter()
+        .any(|sell| sell.wallet == wallet && sell.exact)
 }
 
 #[cfg(test)]
@@ -746,6 +751,27 @@ mod tests {
         ];
 
         assert_eq!(confirmed_buy_tokens(&event, wallet), Some(7));
+    }
+
+    #[test]
+    fn confirmed_sell_rejects_instruction_only_shred_observation() {
+        let wallet = Pubkey::new_unique();
+        let mut event = test_event();
+        event.sells = vec![crate::pump::PumpSell {
+            wallet,
+            quote_amount: None,
+            quote_mint: spl_token::native_mint::ID,
+            quote_decimals: Some(9),
+            token_amount: 7,
+            instruction_index: 0,
+            event_index: 0,
+            virtual_quote_reserves: None,
+            virtual_token_reserves: None,
+            exact: false,
+        }];
+        assert!(!confirmed_sell(&event, wallet));
+        event.sells[0].exact = true;
+        assert!(confirmed_sell(&event, wallet));
     }
 
     fn test_event() -> PumpEvent {

@@ -7,7 +7,7 @@
 use futures::stream::{self, StreamExt};
 use solana_client::rpc_client::RpcClient;
 use solana_client::rpc_response::RpcContactInfo;
-use solana_sdk::commitment_config::CommitmentConfig;
+use solana_commitment_config::CommitmentConfig;
 use std::collections::BTreeSet;
 use std::net::IpAddr;
 use std::sync::Arc;

@@ -2,8 +2,8 @@ use crate::constants::*;
 use crate::pda;
 use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::pubkey::Pubkey;
-use solana_sdk::system_instruction;
-use solana_sdk::sysvar;
+use solana_system_interface::instruction as system_instruction;
+use solana_sysvar::clock as sysvar_clock;
 
 pub struct BuyAccounts {
     pub mint: Pubkey,
@@ -40,7 +40,7 @@ pub fn buy_exact_sol_in(
             AccountMeta::new(accounts.associated_bonding_curve, false),
             AccountMeta::new(accounts.user_token, false),
             AccountMeta::new(accounts.user, true),
-            AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
+            AccountMeta::new_readonly(solana_system_interface::program::ID, false),
             AccountMeta::new_readonly(accounts.token_program, false),
             AccountMeta::new(accounts.creator_vault, false),
             AccountMeta::new_readonly(*EVENT_AUTHORITY_ID, false),
@@ -84,7 +84,7 @@ pub fn sell(
             AccountMeta::new(assoc_curve, false),
             AccountMeta::new(user_token, false),
             AccountMeta::new(user, true),
-            AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
+            AccountMeta::new_readonly(solana_system_interface::program::ID, false),
             AccountMeta::new(creator_vault, false),
             AccountMeta::new_readonly(token_program, false),
             AccountMeta::new_readonly(*EVENT_AUTHORITY_ID, false),
@@ -132,7 +132,7 @@ pub fn lighthouse_slot_leq(slot: u64) -> Instruction {
     data.push(0x05); // IntegerOperator::LessThanOrEqual
     Instruction {
         program_id: *LIGHTHOUSE_ID,
-        accounts: vec![AccountMeta::new_readonly(sysvar::clock::ID, false)],
+        accounts: vec![AccountMeta::new_readonly(sysvar_clock::ID, false)],
         data,
     }
 }

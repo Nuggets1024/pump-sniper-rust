@@ -2,7 +2,7 @@ use futures::{SinkExt, StreamExt};
 use pump_sniper::constants::{PUMP_AMM_PROGRAM, PUMP_MINT_AUTHORITY, PUMP_PROGRAM};
 use pump_sniper::pump::{contains_create_instruction, decode_transactions};
 use solana_client::rpc_client::RpcClient;
-use solana_sdk::commitment_config::CommitmentConfig;
+use solana_commitment_config::CommitmentConfig;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};

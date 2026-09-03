@@ -5,14 +5,14 @@ use base64::Engine;
 use bytes::Bytes;
 use rand::seq::SliceRandom;
 use rand::Rng;
+use solana_commitment_config::CommitmentConfig;
 use solana_rpc_client::rpc_client::RpcClient;
-use solana_sdk::commitment_config::CommitmentConfig;
 use solana_sdk::hash::Hash;
 use solana_sdk::instruction::Instruction;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
-use solana_sdk::system_instruction;
 use solana_sdk::transaction::Transaction;
+use solana_system_interface::instruction as system_instruction;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -561,7 +561,7 @@ mod tests {
     fn named_tip(label: &str) -> TipPlan {
         TipPlan {
             instructions: vec![Instruction {
-                program_id: solana_sdk::system_program::ID,
+                program_id: solana_system_interface::program::ID,
                 accounts: Vec::new(),
                 data: Vec::new(),
             }],

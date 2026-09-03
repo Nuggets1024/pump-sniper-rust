@@ -29,11 +29,11 @@
 - `events.wal.jsonl` 持久化记录事件；`standard` 的 cursor/pending gap 可跨重启恢复，`scan` 每次启动自动归零
 - 每阶段打耗时微秒：`连接Geyser`、`解码`、`策略`、`组买入`、`上链`、`超时卖出` / `跟卖`
 
-这一版还没接 Shredstream。Geyser 是第一条数据面；Shred 以后可以往同一条 `PumpEvent` 通道丢，不是二选一。
+支持 Jito ShredStream Entry gRPC：Shred 负责低延迟首报，Geyser 提供 logs、CPI 和 ALT 完整数据；两路统一进入 `PumpEvent` 通道并按 `(signature, mint)` 去重。配置 `shred.enabled = true` 后连接本机 `shredstream-proxy --grpc-service-port`。
 
 ## 启动
 
-需要 Rust 1.89+（本机用 stable）。
+需要 Rust 1.91+（本机用 stable）。
 
 ```bash
 cp config.example.toml config.toml

@@ -11,9 +11,10 @@ use axum::{Json, Router};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use solana_account_decoder::UiAccountData;
-use solana_rpc_client_api::config::RpcTokenAccountsFilter;
-use solana_sdk::commitment_config::CommitmentConfig;
+use solana_account_decoder_client_types::{token::TokenAccountType, UiAccountData};
+use solana_commitment_config::CommitmentConfig;
+use solana_program_pack::Pack;
+use solana_rpc_client_api::request::TokenAccountsFilter;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
 use spl_token::state::{Account as TokenAccountState, Mint as MintState};
@@ -153,6 +154,9 @@ pub struct AdminStatus {
     pub latest_slot: Option<u64>,
     pub geyser_endpoint: String,
     pub geyser_connections: usize,
+    pub shred_enabled: bool,
+    pub shred_endpoint: String,
+    pub feed: crate::listen::FeedStats,
     pub active_targets: Vec<TargetSnapshot>,
     pub positions: Vec<PositionSnapshot>,
     pub recent_logs: VecDeque<AdminEvent>,
@@ -172,6 +176,9 @@ impl AdminStatus {
             latest_slot: None,
             geyser_endpoint,
             geyser_connections: 2,
+            shred_enabled: cfg.shred.enabled,
+            shred_endpoint: cfg.shred.endpoint.clone(),
+            feed: crate::listen::FeedStats::default(),
             active_targets: Vec::new(),
             positions: Vec::new(),
             recent_logs: VecDeque::with_capacity(RECENT_LOGS),
@@ -361,31 +368,46 @@ pub fn record_token_event(
                 summary.dev_hash = signature.clone();
             }
             "buy" => {
-                if data.get("is_our").and_then(Value::as_bool).unwrap_or(false) {
+                let is_our = data.get("is_our").and_then(Value::as_bool).unwrap_or(false);
+                let exact = data
+                    .get("buy")
+                    .and_then(|buy| buy.get("exact"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                if is_our && exact {
                     if let Some(price) = data.get("price").and_then(Value::as_f64) {
                         summary.buy_price = Some(price);
                     }
-                }
-                if signature.as_ref().is_some_and(|sig| {
-                    summary.pending_buy_sigs.remove(sig) || summary.candidate_hashes.contains(sig)
-                }) {
-                    summary.status = "成功".into();
-                    summary.sniper_hash = signature.clone();
-                    summary.sniper_slot = slot;
-                    summary.interval_slot = slot_gap(summary.create_slot, slot);
+                    if signature.as_ref().is_some_and(|sig| {
+                        summary.pending_buy_sigs.remove(sig)
+                            || summary.candidate_hashes.contains(sig)
+                    }) {
+                        summary.status = "成功".into();
+                        summary.sniper_hash = signature.clone();
+                        summary.sniper_slot = slot;
+                        summary.interval_slot = slot_gap(summary.create_slot, slot);
+                        summary.remark = format!("成交核账来源：{}", event_source_label(&data));
+                    }
                 }
             }
             "sell" => {
-                if data.get("is_our").and_then(Value::as_bool).unwrap_or(false) {
+                let is_our = data.get("is_our").and_then(Value::as_bool).unwrap_or(false);
+                let exact = data
+                    .get("sell")
+                    .and_then(|sell| sell.get("exact"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                if is_our && exact {
                     if let Some(price) = data.get("price").and_then(Value::as_f64) {
                         summary.sell_price = Some(price);
                     }
-                }
-                if signature
-                    .as_ref()
-                    .is_some_and(|sig| summary.pending_sell_sigs.remove(sig))
-                {
-                    summary.status = "成功".into();
+                    if signature
+                        .as_ref()
+                        .is_some_and(|sig| summary.pending_sell_sigs.remove(sig))
+                    {
+                        summary.status = "成功".into();
+                        summary.remark = format!("卖出成交核账来源：{}", event_source_label(&data));
+                    }
                 }
             }
             "submitted" => match data.get("side").and_then(Value::as_str) {
@@ -434,9 +456,7 @@ pub fn record_token_event(
                             summary.remark = note_remark(&data);
                         }
                     }
-                    if !(matches!(status.as_str(), "失败" | "待确认")
-                        && matches!(summary.status.as_str(), "链上成功" | "链上失败" | "成功"))
-                    {
+                    if note_overrides(summary.status.as_str(), status.as_str()) {
                         summary.status = status;
                     }
                 }
@@ -559,7 +579,9 @@ async fn status(State(app): State<AdminApp>, headers: HeaderMap) -> Response {
     if let Err(response) = authorize(&app, &headers, None) {
         return response;
     }
-    Json(app.inner.status.read().await.clone()).into_response()
+    let mut status = app.inner.status.read().await.clone();
+    status.feed = crate::listen::feed_stats();
+    Json(status).into_response()
 }
 
 async fn events(
@@ -647,6 +669,9 @@ async fn tokens(State(app): State<AdminApp>, headers: HeaderMap) -> Response {
         .order
         .iter()
         .filter_map(|mint| store.summaries.get(mint))
+        // 狙击列表只展示确实提交过买单的记录；仅监听到 CREATE、但因熔断或
+        // 并发限制没有发单的 mint 不应长期显示为“处理中”。
+        .filter(|summary| is_submitted_sniper(summary))
         .cloned()
         .collect::<Vec<_>>();
     Json(tokens).into_response()
@@ -699,7 +724,8 @@ async fn holdings(
                 }
             };
             for token_program in [spl_token::ID, spl_token_2022::ID] {
-                let token_account = crate::pda::associated_user(&owner, &parsed_mint, &token_program);
+                let token_account =
+                    crate::pda::associated_user(&owner, &parsed_mint, &token_program);
                 match rpc.get_token_account_balance(&token_account).await {
                     Ok(balance) => snapshots.push(HoldingSnapshot {
                         mint: mint.clone(),
@@ -733,34 +759,36 @@ async fn holdings(
         token_program: String,
         token_account: String,
         amount: u64,
+        decimals: Option<u8>,
+        ui_amount: Option<f64>,
+        ui_amount_string: Option<String>,
     }
     let mut raw_accounts: Vec<RawAccount> = Vec::new();
     let mut unique_mints: HashSet<String> = HashSet::new();
     for token_program in [spl_token::ID, spl_token_2022::ID] {
-        let filter = RpcTokenAccountsFilter::ProgramId(token_program.to_string());
+        let filter = TokenAccountsFilter::ProgramId(token_program);
         let accounts = match rpc.get_token_accounts_by_owner(&owner, filter).await {
             Ok(accounts) => accounts,
             Err(_) => continue,
         };
         for keyed in accounts {
-            let data = match keyed.account.data.decode() {
-                Some(data) => data,
-                None => continue,
-            };
-            let account = match TokenAccountState::unpack(&data) {
-                Ok(account) => account,
-                Err(_) => continue,
+            let Some(account) = decode_token_holding(&keyed.account.data) else {
+                continue;
             };
             if account.amount == 0 {
                 continue;
             }
-            let mint = account.mint.to_string();
-            unique_mints.insert(mint.clone());
+            if account.decimals.is_none() {
+                unique_mints.insert(account.mint.clone());
+            }
             raw_accounts.push(RawAccount {
-                mint,
+                mint: account.mint,
                 token_program: token_program.to_string(),
                 token_account: keyed.pubkey.clone(),
                 amount: account.amount,
+                decimals: account.decimals,
+                ui_amount: account.ui_amount,
+                ui_amount_string: account.ui_amount_string,
             });
         }
     }
@@ -775,8 +803,8 @@ async fn holdings(
         if let Ok(accounts) = rpc.get_multiple_accounts(&mint_pubkeys).await {
             for (pubkey, account) in mint_pubkeys.iter().zip(accounts.iter()) {
                 let Some(account) = account else { continue };
-                let Some(data) = account.data.decode() else { continue };
-                if let Ok(mint_state) = MintState::unpack(&data) {
+                let data = &account.data;
+                if let Ok(mint_state) = MintState::unpack(data) {
                     mint_decimals.insert(pubkey.to_string(), mint_state.decimals);
                 }
             }
@@ -785,20 +813,62 @@ async fn holdings(
 
     let mut snapshots = Vec::new();
     for raw in raw_accounts {
-        let decimals = mint_decimals.get(&raw.mint).copied().unwrap_or(0);
-        let ui_amount = ui_amount_value(raw.amount, decimals);
+        let decimals = raw
+            .decimals
+            .or_else(|| mint_decimals.get(&raw.mint).copied())
+            .unwrap_or(0);
+        let ui_amount = raw
+            .ui_amount
+            .unwrap_or_else(|| ui_amount_value(raw.amount, decimals));
         snapshots.push(HoldingSnapshot {
             mint: raw.mint,
             token_program: raw.token_program,
             token_account: raw.token_account,
             amount: raw.amount.to_string(),
             decimals,
-            ui_amount: Some(ui_amount as f64),
-            ui_amount_string: format_ui_amount(raw.amount, decimals),
+            ui_amount: Some(ui_amount),
+            ui_amount_string: raw
+                .ui_amount_string
+                .unwrap_or_else(|| format_ui_amount(raw.amount, decimals)),
             error: None,
         });
     }
     Json(snapshots).into_response()
+}
+
+struct DecodedTokenHolding {
+    mint: String,
+    amount: u64,
+    decimals: Option<u8>,
+    ui_amount: Option<f64>,
+    ui_amount_string: Option<String>,
+}
+
+fn decode_token_holding(data: &UiAccountData) -> Option<DecodedTokenHolding> {
+    if let UiAccountData::Json(parsed) = data {
+        let TokenAccountType::Account(account) =
+            serde_json::from_value::<TokenAccountType>(parsed.parsed.clone()).ok()?
+        else {
+            return None;
+        };
+        return Some(DecodedTokenHolding {
+            mint: account.mint,
+            amount: account.token_amount.amount.parse().ok()?,
+            decimals: Some(account.token_amount.decimals),
+            ui_amount: account.token_amount.ui_amount,
+            ui_amount_string: Some(account.token_amount.ui_amount_string),
+        });
+    }
+
+    let raw = data.decode()?;
+    let account = TokenAccountState::unpack(&raw).ok()?;
+    Some(DecodedTokenHolding {
+        mint: account.mint.to_string(),
+        amount: account.amount,
+        decimals: None,
+        ui_amount: None,
+        ui_amount_string: None,
+    })
 }
 
 fn ui_amount_value(amount: u64, decimals: u8) -> f64 {
@@ -806,7 +876,11 @@ fn ui_amount_value(amount: u64, decimals: u8) -> f64 {
 }
 
 fn format_ui_amount(amount: u64, decimals: u8) -> String {
-    let mut formatted = format!("{:.*}", decimals as usize, ui_amount_value(amount, decimals));
+    let mut formatted = format!(
+        "{:.*}",
+        decimals as usize,
+        ui_amount_value(amount, decimals)
+    );
     if formatted.contains('.') {
         while formatted.ends_with('0') {
             formatted.pop();
@@ -900,6 +974,23 @@ fn slot_gap(create_slot: Option<u64>, latest_slot: Option<u64>) -> Option<u64> {
         .map(|(latest, create)| latest.saturating_sub(create))
 }
 
+fn is_submitted_sniper(summary: &TokenSummary) -> bool {
+    summary.sniper_hash.is_some() || !summary.candidate_hashes.is_empty()
+}
+
+fn event_source_label(data: &Value) -> &'static str {
+    match data
+        .get("event")
+        .and_then(|event| event.get("source_id"))
+        .and_then(Value::as_u64)
+    {
+        Some(62) => "Shred",
+        Some(63) => "RPC repair",
+        Some(_) => "gRPC",
+        None => "未知",
+    }
+}
+
 fn candidate_hashes(data: &Value) -> Vec<String> {
     data.get("signatures")
         .and_then(Value::as_array)
@@ -921,6 +1012,38 @@ fn note_status(data: &Value) -> Option<String> {
         "等待核账" => Some("待确认".into()),
         _ => None,
     }
+}
+
+/// 是否为已定型的交易结果（终态）。
+fn is_terminal_status(status: &str) -> bool {
+    matches!(status, "成功" | "链上成功" | "失败" | "链上失败")
+}
+
+/// 是否为等待/进行中的非终态。
+fn is_pending_status(status: &str) -> bool {
+    matches!(status, "待确认" | "处理中")
+}
+
+/// 是否为成功类终态（这类结果一旦确立，不被「失败」倒退覆盖）。
+fn is_success_status(status: &str) -> bool {
+    matches!(status, "成功" | "链上成功" | "链上失败")
+}
+
+/// 判断新的 note 状态是否允许覆盖当前状态（返回 true 表示允许用 incoming 覆盖）。
+///
+/// 规则（含原代码意图，修复了「失败被待确认倒退」的缺陷）：
+/// 1. 已定型结果（成功/失败）不可被待确认/处理中倒退覆盖 —— 修复核心 bug：
+///    「买入失败」后紧接着的「等待核账超时」不得把状态倒退成待确认。
+/// 2. 成功类结果不被「失败」覆盖 —— 已锁定的成功/链上结果不因本地失败误判而倒退。
+/// 3. 其它情况允许覆盖（进行中→终态推进、链上结果后到优先、本地失败被链上成功纠正）。
+fn note_overrides(current: &str, incoming: &str) -> bool {
+    if is_terminal_status(current) && is_pending_status(incoming) {
+        return false;
+    }
+    if is_success_status(current) && incoming == "失败" {
+        return false;
+    }
+    true
 }
 
 fn note_remark(data: &Value) -> String {
@@ -951,8 +1074,106 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parses_json_parsed_token_2022_holding_from_owner_scan() {
+        let data: UiAccountData = serde_json::from_value(serde_json::json!({
+            "program": "spl-token-2022",
+            "parsed": {
+                "type": "account",
+                "info": {
+                    "mint": "DLz1imBbiPWN7bwss4WnRnbcYzJNHH4w7A7ks1Whpump",
+                    "owner": "FGkyCsQMxQiFEvEqW8dTfgvs3aAPruNpAYg7HfbmXsPs",
+                    "tokenAmount": {
+                        "amount": "176595210438",
+                        "decimals": 6,
+                        "uiAmount": 176595.210438,
+                        "uiAmountString": "176595.210438"
+                    },
+                    "state": "initialized",
+                    "isNative": false,
+                    "extensions": []
+                }
+            },
+            "space": 170
+        }))
+        .unwrap();
+
+        let holding = decode_token_holding(&data).expect("应解析 jsonParsed Token-2022 账户");
+        assert_eq!(holding.mint, "DLz1imBbiPWN7bwss4WnRnbcYzJNHH4w7A7ks1Whpump");
+        assert_eq!(holding.amount, 176_595_210_438);
+        assert_eq!(holding.decimals, Some(6));
+        assert_eq!(holding.ui_amount_string.as_deref(), Some("176595.210438"));
+    }
+
+    fn summary_with_submission(sniper_hash: Option<&str>, candidates: &[&str]) -> TokenSummary {
+        TokenSummary {
+            mint: "mint".into(),
+            create_time: None,
+            create_slot: None,
+            sniper_slot: None,
+            interval_slot: None,
+            buy_price: None,
+            sell_price: None,
+            dev_hash: None,
+            sniper_hash: sniper_hash.map(str::to_owned),
+            candidate_hashes: candidates.iter().map(|value| (*value).to_owned()).collect(),
+            execution_channel: None,
+            remark: String::new(),
+            status: "处理中".into(),
+            pending_buy_sigs: HashSet::new(),
+            pending_sell_sigs: HashSet::new(),
+        }
+    }
+
+    #[test]
+    fn sniper_list_excludes_observed_mint_without_local_submission() {
+        assert!(!is_submitted_sniper(&summary_with_submission(None, &[])));
+        assert!(is_submitted_sniper(&summary_with_submission(
+            Some("sig"),
+            &[]
+        )));
+        assert!(is_submitted_sniper(&summary_with_submission(
+            None,
+            &["candidate"]
+        )));
+    }
+
+    #[test]
     fn slot_gap_uses_observed_slot_delta() {
         assert_eq!(slot_gap(Some(443_870_619), Some(443_870_622)), Some(3));
+    }
+
+    #[test]
+    fn terminal_status_not_reverted_by_pending_notice() {
+        // 已定型结果不应被后续「等待核账」/「处理中」倒退覆盖（核心 bug：失败→待确认）
+        assert!(!note_overrides("失败", "待确认"));
+        assert!(!note_overrides("失败", "处理中"));
+        assert!(!note_overrides("成功", "待确认"));
+        assert!(!note_overrides("成功", "处理中"));
+        assert!(!note_overrides("链上失败", "待确认"));
+        assert!(!note_overrides("链上成功", "处理中"));
+    }
+
+    #[test]
+    fn success_terminal_not_overridden_by_failure() {
+        // 已锁定的成功/链上结果不被本地「买入失败」倒退（原代码意图）
+        assert!(!note_overrides("成功", "失败"));
+        assert!(!note_overrides("链上成功", "失败"));
+        assert!(!note_overrides("链上失败", "失败"));
+    }
+
+    #[test]
+    fn progress_towards_terminal_allowed() {
+        // 进行中→待确认/终态推进
+        assert!(note_overrides("处理中", "待确认"));
+        assert!(note_overrides("处理中", "失败"));
+        assert!(note_overrides("处理中", "成功"));
+        assert!(note_overrides("待确认", "失败"));
+        assert!(note_overrides("待确认", "成功"));
+        // 本地「失败」被链上结果纠正（后到终态覆盖）
+        assert!(note_overrides("失败", "链上失败"));
+        assert!(note_overrides("失败", "成功"));
+        assert!(note_overrides("失败", "链上成功"));
+        assert!(note_overrides("成功", "链上成功"));
     }
 
     #[test]

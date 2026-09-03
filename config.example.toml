@@ -32,6 +32,12 @@ x_token = ""
 commitment = "processed"
 reconnect_ms = 500
 
+[shred]
+# Jito shredstream-proxy 的 --grpc-service-port；与程序同机时使用 loopback。
+enabled = false
+endpoint = "http://127.0.0.1:10800"
+reconnect_ms = 500
+
 [wallet]
 keypair_path = "keypair.json"
 

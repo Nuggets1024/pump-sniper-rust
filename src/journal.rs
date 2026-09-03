@@ -131,7 +131,8 @@ struct TokenHistory {
     create_slot: u64,
     buys: Vec<ObservedBuy>,
     sells: Vec<ObservedSell>,
-    seen: HashSet<(String, u32, u16, Pubkey, bool)>,
+    // 最后一位区分指令级估算与 Geyser TradeEvent 精确数据，允许后者补充核账。
+    seen: HashSet<(String, u32, u16, Pubkey, bool, bool)>,
 }
 
 struct PendingSubmission {
@@ -352,12 +353,18 @@ async fn run(
             continue;
         };
         for buy in &event.buys {
+            // Entry/Shred 只有指令参数，没有执行结果。它可能执行失败，也没有实际
+            // token 数量，因此不能以“买入成交”写日志或进入管理页。
+            if !buy.exact {
+                continue;
+            }
             let key = (
                 event.signature.clone(),
                 buy.instruction_index,
                 buy.event_index,
                 buy.wallet,
                 true,
+                buy.exact,
             );
             if !history.seen.insert(key) {
                 continue;
@@ -407,12 +414,16 @@ async fn run(
             }
         }
         for sell in &event.sells {
+            if !sell.exact {
+                continue;
+            }
             let key = (
                 event.signature.clone(),
                 sell.instruction_index,
                 sell.event_index,
                 sell.wallet,
                 false,
+                sell.exact,
             );
             if !history.seen.insert(key) {
                 continue;
@@ -1431,6 +1442,82 @@ fn timestamp() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn instruction_only_shred_trade_is_not_published_as_confirmed_buy() {
+        let wallet = Pubkey::new_unique();
+        let mint = Pubkey::new_unique();
+        let directory = std::env::temp_dir().join(format!(
+            "pump-sniper-journal-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let (tx, rx) = mpsc::channel(1);
+        let task = tokio::spawn(run(directory.clone(), wallet, rx));
+        tx.send(JournalMessage::Chain(Box::new(instruction_only_buy(
+            mint, wallet,
+        ))))
+        .await
+        .unwrap();
+        drop(tx);
+        task.await.unwrap().unwrap();
+
+        let report = tokio::fs::read_to_string(directory.join(format!("{mint}.log")))
+            .await
+            .unwrap_or_default();
+        let _ = tokio::fs::remove_dir_all(directory).await;
+        assert!(
+            !report.contains("[买入]"),
+            "指令级 Shred 事件不能伪装成确认成交: {report}"
+        );
+    }
+
+    fn instruction_only_buy(mint: Pubkey, wallet: Pubkey) -> PumpEvent {
+        PumpEvent {
+            source_id: crate::listen::shred::SHRED_SOURCE_ID,
+            source_mask: 1u64 << crate::listen::shred::SHRED_SOURCE_ID,
+            replayed: false,
+            repaired: false,
+            slot: 443_949_599,
+            transaction_index: 3,
+            signature: "instruction-only-signature".into(),
+            fee_lamports: 0,
+            signer: wallet,
+            mint,
+            bonding_curve: Pubkey::new_unique(),
+            creator: wallet,
+            token_program: spl_token::ID,
+            quote_mint: spl_token::native_mint::ID,
+            quote_decimals: Some(9),
+            name: None,
+            symbol: None,
+            uri: None,
+            kind: crate::pump::PumpIxKind::BuyExactQuoteInV2,
+            buy_quote_amount: Some(1_000_000_000),
+            buy_instruction_count: 1,
+            buys: vec![PumpBuy {
+                wallet,
+                quote_amount: 1_000_000_000,
+                quote_mint: spl_token::native_mint::ID,
+                quote_decimals: Some(9),
+                token_amount: None,
+                instruction_index: 3,
+                event_index: 0,
+                virtual_quote_reserves: None,
+                virtual_token_reserves: None,
+                exact: false,
+            }],
+            sells: vec![],
+            jito_tip_lamports: None,
+            jito_dont_front: false,
+            is_create: false,
+            is_buy: true,
+            is_sell: false,
+            seen_ns: 0,
+        }
+    }
 
     #[test]
     fn submission_wording_distinguishes_udp_dispatch_from_acceptance() {

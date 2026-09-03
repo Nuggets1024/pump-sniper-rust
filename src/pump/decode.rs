@@ -54,7 +54,7 @@ pub struct PumpSell {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PumpEvent {
-    /// 0..62 为 Geyser 编号，63 保留给 RPC repair。
+    /// 0..61 为 Geyser 编号，62 为 ShredStream，63 为 RPC repair。
     pub source_id: u8,
     /// 当前已知来源位图；首个低延迟事件通常只包含一个 bit。
     pub source_mask: u64,
@@ -1066,7 +1066,7 @@ fn jito_tip_for_instruction(
     let Some(program) = keys.get(program_id_index as usize) else {
         return 0;
     };
-    if *program != solana_sdk::system_program::ID {
+    if *program != solana_system_interface::program::ID {
         return 0;
     }
     let Some(destination) = accounts.get(1).and_then(|index| keys.get(*index as usize)) else {

@@ -7,7 +7,7 @@ use crate::pump::ix::{
 };
 use crate::pump::PumpEvent;
 use anyhow::Context;
-use solana_sdk::compute_budget::ComputeBudgetInstruction;
+use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_sdk::hash::Hash;
 use solana_sdk::instruction::AccountMeta;
 use solana_sdk::instruction::Instruction;

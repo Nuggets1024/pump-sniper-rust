@@ -2,10 +2,11 @@
 
 use crate::pump::{decode_transactions, PumpEvent};
 use solana_client::rpc_config::RpcBlockConfig;
+use solana_commitment_config::CommitmentConfig;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
-use solana_sdk::commitment_config::CommitmentConfig;
 use solana_sdk::message::VersionedMessage;
 use solana_sdk::pubkey::Pubkey;
+use solana_sdk::transaction::VersionedTransaction;
 use solana_transaction_status::{
     EncodedTransactionWithStatusMeta, TransactionDetails, UiInstruction, UiTransactionEncoding,
     UiTransactionStatusMeta, UiTransactionTokenBalance,
@@ -345,6 +346,32 @@ fn rpc_transaction_to_update(
     })
 }
 
+pub(crate) fn versioned_transaction_to_update(
+    slot: u64,
+    index: u64,
+    transaction: &VersionedTransaction,
+) -> Option<SubscribeUpdateTransaction> {
+    let signature = transaction.signatures.first()?.as_ref().to_vec();
+    Some(SubscribeUpdateTransaction {
+        slot,
+        transaction: Some(SubscribeUpdateTransactionInfo {
+            signature,
+            is_vote: false,
+            transaction: Some(ProtoTransaction {
+                signatures: transaction
+                    .signatures
+                    .iter()
+                    .map(|signature| signature.as_ref().to_vec())
+                    .collect(),
+                message: Some(proto_message(&transaction.message)),
+            }),
+            // Shred/Entry 是执行前数据，没有 fee、logs、CPI 或 loaded addresses。
+            meta: None,
+            index,
+        }),
+    })
+}
+
 fn proto_message(message: &VersionedMessage) -> ProtoMessage {
     let header = message.header();
     let (versioned, lookups) = match message {
@@ -361,6 +388,7 @@ fn proto_message(message: &VersionedMessage) -> ProtoMessage {
                 })
                 .collect(),
         ),
+        VersionedMessage::V1(_) => (true, Vec::new()),
     };
     ProtoMessage {
         header: Some(ProtoHeader {
@@ -385,6 +413,7 @@ fn proto_message(message: &VersionedMessage) -> ProtoMessage {
             .collect(),
         versioned,
         address_table_lookups: lookups,
+        config: None,
     }
 }
 
@@ -451,6 +480,7 @@ fn proto_meta(meta: UiTransactionStatusMeta) -> ProtoMeta {
         return_data: None,
         return_data_none: true,
         compute_units_consumed: meta.compute_units_consumed.map(|value| value),
+        cost_units: None,
     }
 }
 

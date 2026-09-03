@@ -68,7 +68,7 @@ impl RpcSender {
             client: Arc::new(crate::rpc::blocking(
                 route.endpoint.clone(),
                 Duration::from_secs(8),
-                solana_sdk::commitment_config::CommitmentConfig::confirmed(),
+                solana_commitment_config::CommitmentConfig::confirmed(),
             )),
             config: RpcSendTransactionConfig {
                 skip_preflight,
