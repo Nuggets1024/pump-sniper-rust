@@ -63,12 +63,12 @@ pub static JITO_TIP_ACCOUNTS: LazyLock<[Pubkey; 8]> = LazyLock::new(|| {
     ]
 });
 
-pub static PROTOCOL_FEE_RECIPIENTS: LazyLock<[Pubkey; 2]> = LazyLock::new(|| {
-    [
-        Pubkey::from_str("CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM").unwrap(),
-        Pubkey::from_str("62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV").unwrap(),
-    ]
-});
+/// Pump global config 中登记的**唯一合法** fee_recipient。
+/// 注意：不能随机轮换！程序 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P 的
+/// fee_recipient.rs 会强制 fee_recipient == global.fee_recipient，传错即抛
+/// NotAuthorized (6000)，导致整笔买入失败。
+pub static PROTOCOL_FEE_RECIPIENT: LazyLock<Pubkey> =
+    LazyLock::new(|| Pubkey::from_str("62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV").unwrap());
 
 pub static BUYBACK_FEE_RECIPIENTS: LazyLock<[Pubkey; 8]> = LazyLock::new(|| {
     [
@@ -84,7 +84,7 @@ pub static BUYBACK_FEE_RECIPIENTS: LazyLock<[Pubkey; 8]> = LazyLock::new(|| {
 });
 
 pub fn pick_protocol_fee() -> Pubkey {
-    PROTOCOL_FEE_RECIPIENTS[rand::random::<usize>() % PROTOCOL_FEE_RECIPIENTS.len()]
+    *PROTOCOL_FEE_RECIPIENT
 }
 
 pub fn pick_buyback_fee_recipient() -> Pubkey {

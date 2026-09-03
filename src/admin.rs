@@ -11,9 +11,12 @@ use axum::{Json, Router};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use solana_account_decoder::UiAccountData;
+use solana_rpc_client_api::config::RpcTokenAccountsFilter;
 use solana_sdk::commitment_config::CommitmentConfig;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
+use spl_token::state::{Account as TokenAccountState, Mint as MintState};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -668,63 +671,151 @@ async fn holdings(
         Ok(owner) => owner,
         Err(error) => return api_error(StatusCode::BAD_REQUEST, format!("owner 无效: {error}")),
     };
-    let mints = if request.mints.is_empty() {
-        let store = app.inner.tokens.read().await;
-        store.order.iter().take(50).cloned().collect::<Vec<_>>()
-    } else {
-        request.mints
-    };
     let rpc_url = request.rpc_url.unwrap_or_else(|| app.inner.rpc_url.clone());
     let rpc = crate::rpc::nonblocking(
         rpc_url,
         std::time::Duration::from_secs(30),
         CommitmentConfig::processed(),
     );
-    let mut snapshots = Vec::new();
-    for mint in mints {
-        let parsed_mint = match Pubkey::from_str(&mint) {
-            Ok(mint) => mint,
-            Err(error) => {
-                snapshots.push(HoldingSnapshot {
-                    mint,
-                    token_program: String::new(),
-                    token_account: String::new(),
-                    amount: "0".into(),
-                    decimals: 0,
-                    ui_amount: None,
-                    ui_amount_string: "0".into(),
-                    error: Some(format!("mint 无效: {error}")),
-                });
+
+    // 指定 mints 时，沿用旧的按 ATA 余额查询逻辑
+    if !request.mints.is_empty() {
+        let mut snapshots = Vec::new();
+        for mint in &request.mints {
+            let parsed_mint = match Pubkey::from_str(mint) {
+                Ok(mint) => mint,
+                Err(error) => {
+                    snapshots.push(HoldingSnapshot {
+                        mint: mint.clone(),
+                        token_program: String::new(),
+                        token_account: String::new(),
+                        amount: "0".into(),
+                        decimals: 0,
+                        ui_amount: None,
+                        ui_amount_string: "0".into(),
+                        error: Some(format!("mint 无效: {error}")),
+                    });
+                    continue;
+                }
+            };
+            for token_program in [spl_token::ID, spl_token_2022::ID] {
+                let token_account = crate::pda::associated_user(&owner, &parsed_mint, &token_program);
+                match rpc.get_token_account_balance(&token_account).await {
+                    Ok(balance) => snapshots.push(HoldingSnapshot {
+                        mint: mint.clone(),
+                        token_program: token_program.to_string(),
+                        token_account: token_account.to_string(),
+                        amount: balance.amount,
+                        decimals: balance.decimals,
+                        ui_amount: balance.ui_amount,
+                        ui_amount_string: balance.ui_amount_string,
+                        error: None,
+                    }),
+                    Err(error) => snapshots.push(HoldingSnapshot {
+                        mint: mint.clone(),
+                        token_program: token_program.to_string(),
+                        token_account: token_account.to_string(),
+                        amount: "0".into(),
+                        decimals: 0,
+                        ui_amount: None,
+                        ui_amount_string: "0".into(),
+                        error: Some(error.to_string()),
+                    }),
+                }
+            }
+        }
+        return Json(snapshots).into_response();
+    }
+
+    // 查询钱包真实持仓：列出全部 token 账户，仅保留非零余额
+    struct RawAccount {
+        mint: String,
+        token_program: String,
+        token_account: String,
+        amount: u64,
+    }
+    let mut raw_accounts: Vec<RawAccount> = Vec::new();
+    let mut unique_mints: HashSet<String> = HashSet::new();
+    for token_program in [spl_token::ID, spl_token_2022::ID] {
+        let filter = RpcTokenAccountsFilter::ProgramId(token_program.to_string());
+        let accounts = match rpc.get_token_accounts_by_owner(&owner, filter).await {
+            Ok(accounts) => accounts,
+            Err(_) => continue,
+        };
+        for keyed in accounts {
+            let data = match keyed.account.data.decode() {
+                Some(data) => data,
+                None => continue,
+            };
+            let account = match TokenAccountState::unpack(&data) {
+                Ok(account) => account,
+                Err(_) => continue,
+            };
+            if account.amount == 0 {
                 continue;
             }
-        };
-        for token_program in [spl_token::ID, spl_token_2022::ID] {
-            let token_account = crate::pda::associated_user(&owner, &parsed_mint, &token_program);
-            match rpc.get_token_account_balance(&token_account).await {
-                Ok(balance) => snapshots.push(HoldingSnapshot {
-                    mint: mint.clone(),
-                    token_program: token_program.to_string(),
-                    token_account: token_account.to_string(),
-                    amount: balance.amount,
-                    decimals: balance.decimals,
-                    ui_amount: balance.ui_amount,
-                    ui_amount_string: balance.ui_amount_string,
-                    error: None,
-                }),
-                Err(error) => snapshots.push(HoldingSnapshot {
-                    mint: mint.clone(),
-                    token_program: token_program.to_string(),
-                    token_account: token_account.to_string(),
-                    amount: "0".into(),
-                    decimals: 0,
-                    ui_amount: None,
-                    ui_amount_string: "0".into(),
-                    error: Some(error.to_string()),
-                }),
+            let mint = account.mint.to_string();
+            unique_mints.insert(mint.clone());
+            raw_accounts.push(RawAccount {
+                mint,
+                token_program: token_program.to_string(),
+                token_account: keyed.pubkey.clone(),
+                amount: account.amount,
+            });
+        }
+    }
+
+    // 批量拉取 mint 账户以读取 decimals
+    let mint_pubkeys: Vec<Pubkey> = unique_mints
+        .iter()
+        .filter_map(|mint| Pubkey::from_str(mint).ok())
+        .collect();
+    let mut mint_decimals: HashMap<String, u8> = HashMap::new();
+    if !mint_pubkeys.is_empty() {
+        if let Ok(accounts) = rpc.get_multiple_accounts(&mint_pubkeys).await {
+            for (pubkey, account) in mint_pubkeys.iter().zip(accounts.iter()) {
+                let Some(account) = account else { continue };
+                let Some(data) = account.data.decode() else { continue };
+                if let Ok(mint_state) = MintState::unpack(&data) {
+                    mint_decimals.insert(pubkey.to_string(), mint_state.decimals);
+                }
             }
         }
     }
+
+    let mut snapshots = Vec::new();
+    for raw in raw_accounts {
+        let decimals = mint_decimals.get(&raw.mint).copied().unwrap_or(0);
+        let ui_amount = ui_amount_value(raw.amount, decimals);
+        snapshots.push(HoldingSnapshot {
+            mint: raw.mint,
+            token_program: raw.token_program,
+            token_account: raw.token_account,
+            amount: raw.amount.to_string(),
+            decimals,
+            ui_amount: Some(ui_amount as f64),
+            ui_amount_string: format_ui_amount(raw.amount, decimals),
+            error: None,
+        });
+    }
     Json(snapshots).into_response()
+}
+
+fn ui_amount_value(amount: u64, decimals: u8) -> f64 {
+    amount as f64 / 10f64.powi(decimals as i32)
+}
+
+fn format_ui_amount(amount: u64, decimals: u8) -> String {
+    let mut formatted = format!("{:.*}", decimals as usize, ui_amount_value(amount, decimals));
+    if formatted.contains('.') {
+        while formatted.ends_with('0') {
+            formatted.pop();
+        }
+        if formatted.ends_with('.') {
+            formatted.pop();
+        }
+    }
+    formatted
 }
 
 async fn command(app: &AdminApp, headers: &HeaderMap, command: BotCommand) -> Response {

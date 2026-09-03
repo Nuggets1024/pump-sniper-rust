@@ -9,3 +9,7 @@
 .DS_Store
 *.pem
 .env
+*.log
+*.pid
+*.out
+build_status.txt

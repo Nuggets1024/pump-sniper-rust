@@ -147,7 +147,7 @@ function App() {
       const response = await api("/api/holdings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mints })
+        body: JSON.stringify({ mints: mints ?? [] })
       });
       if (!response.ok) {
         alert(await response.text());
@@ -161,6 +161,7 @@ function App() {
 
   useEffect(() => {
     refresh();
+    fetchHoldings();
     const timer = setInterval(refresh, 1000);
     const eventsUrl = `/api/events${token ? `?token=${encodeURIComponent(token)}` : ""}`;
     const stream = new EventSource(eventsUrl);
@@ -176,7 +177,6 @@ function App() {
   const activeHoldings = useMemo(
     () => holdings.filter((item) => item.amount !== "0" || item.error), [holdings]
   );
-  const tokenMints = useMemo(() => tokens.slice(0, 20).map((item) => item.mint), [tokens]);
   const newestEvents = useMemo(() => [...events].reverse(), [events]);
   const isRunning = status?.bot === "running";
   const logUrl = (mint) => `/api/tokens/${encodeURIComponent(mint)}/logs${token ? `?token=${encodeURIComponent(token)}` : ""}`;
@@ -196,14 +196,14 @@ function App() {
         </NavbarBrand>
         <NavbarContent justify="end" className="gap-2">
           <NavbarItem>
-            <Button size="sm" color="success" variant="bordered" startContent={<Play size={14} />}
+            <Button size="sm" color="success" variant="solid" startContent={<Play size={14} />}
               isLoading={commandBusy === "/api/bot/start"} isDisabled={isRunning || !!commandBusy}
               onPress={() => command("/api/bot/start")}>
               {isRunning ? "已启动" : "启动"}
             </Button>
           </NavbarItem>
           <NavbarItem>
-            <Button size="sm" color="danger" variant="bordered" startContent={<Pause size={14} />}
+            <Button size="sm" color="danger" variant="solid" startContent={<Pause size={14} />}
               isLoading={commandBusy === "/api/bot/stop"} isDisabled={!isRunning || !!commandBusy}
               onPress={() => command("/api/bot/stop")}>
               停止并卖出
@@ -251,8 +251,8 @@ function App() {
                 ))}
               </ScrollShadow>
             ) : <p className="min-w-0 flex-1 text-small text-default-400">暂无持仓</p>}
-            <Button size="sm" variant="bordered" startContent={!holdingBusy && <Search size={14} />}
-              isLoading={holdingBusy} onPress={() => fetchHoldings(tokenMints)}>
+            <Button size="sm" color="primary" variant="solid" startContent={!holdingBusy && <Search size={14} />}
+              isLoading={holdingBusy} onPress={() => fetchHoldings()}>
               刷新持仓
             </Button>
           </CardBody>
@@ -274,7 +274,7 @@ function App() {
               <TableColumn width={86} align="center">利润</TableColumn>
               <TableColumn width={238} align="center">Dev Hash / 狙击 Hash</TableColumn>
               <TableColumn width={140} align="center">通道</TableColumn>
-              <TableColumn width={72} align="center">备注</TableColumn>
+              <TableColumn width={160} align="center">备注</TableColumn>
               <TableColumn width={72} align="center">操作</TableColumn>
             </TableHeader>
             <TableBody emptyContent="暂无狙击记录" isLoading={!status}
@@ -315,7 +315,7 @@ function App() {
                       )}
                     </TableCell>
                     <TableCell>
-                      <div className="flex items-center gap-2 whitespace-nowrap">
+                      <div className="flex items-center justify-center gap-2 whitespace-nowrap">
                         <HashLink value={item.dev_hash} label="Dev" />
                                 <span className="text-divider">/</span>
                         <HashLink value={item.sniper_hash} label="狙击" />

@@ -101,8 +101,38 @@ button, a { -webkit-tap-highlight-color: transparent; }
 }
 
 @media (hover: hover) and (pointer: fine) {
-  button { transition: transform 140ms cubic-bezier(0.23, 1, 0.32, 1); }
+  button { transition: transform 140ms cubic-bezier(0.23, 1, 0.32, 1), opacity 120ms ease, background-color 120ms ease; }
   button:active { transform: scale(0.97); }
+}
+
+/* 禁用状态按钮优化 */
+button[data-disabled="true"],
+button:disabled {
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* 实色按钮禁用态：统一灰色，去除原有彩色背景 */
+button[data-disabled="true"][data-variant="solid"],
+button:disabled[data-variant="solid"] {
+  background: #f4f4f5 !important;
+  border-color: #e4e4e7 !important;
+  color: #a1a1aa !important;
+  filter: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  button[data-disabled="true"]:hover,
+  button:disabled:hover {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button[data-disabled="true"],
+  button:disabled {
+    transition: none;
+  }
 }
 
 @media (max-width: 1280px) {
