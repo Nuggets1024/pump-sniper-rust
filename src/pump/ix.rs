@@ -67,6 +67,7 @@ pub fn sell(
     amount: u64,
     min_sol: u64,
     fee_recipient: Pubkey,
+    user_volume: Pubkey,
     bonding_curve_v2: Pubkey,
     buyback_fee_recipient: Pubkey,
 ) -> Instruction {
@@ -91,6 +92,10 @@ pub fn sell(
             AccountMeta::new_readonly(*PUMP_PROGRAM_ID, false),
             AccountMeta::new_readonly(*FEE_CONFIG_ID, false),
             AccountMeta::new_readonly(*PUMP_FEE_PROGRAM_ID, false),
+            // Cashback coins interpret the first remaining account as the
+            // seller's writable UserVolumeAccumulator PDA. It must precede
+            // bonding_curve_v2; otherwise that PDA is rejected with 6073.
+            AccountMeta::new(user_volume, false),
             AccountMeta::new_readonly(bonding_curve_v2, false),
             AccountMeta::new(buyback_fee_recipient, false),
         ],

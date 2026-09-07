@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import {
   Button, Card, CardBody, CardHeader, Chip, Divider, HeroUIProvider, Link,
   Navbar, NavbarBrand, NavbarContent, NavbarItem, ScrollShadow, Spinner, Table,
-  TableBody, TableCell, TableColumn, TableHeader, TableRow, Tooltip
+  TableBody, TableCell, TableColumn, TableHeader, TableRow, Tab, Tabs, Tooltip
 } from "@heroui/react";
 import {
   Activity, Bot, ChevronDown, ChevronUp, CircleDollarSign, DatabaseZap,
@@ -141,8 +141,24 @@ function App() {
     }
   }
 
-  async function fetchHoldings(mints = []) {
-    setHoldingBusy(true);
+  async function sellAllHoldings() {
+    const path = "/api/holdings/sell-all";
+    setCommandBusy(path);
+    try {
+      const response = await api(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ holdings: activeHoldings.filter((item) => !item.error) })
+      });
+      if (!response.ok) alert(await response.text());
+      await refresh();
+    } finally {
+      setCommandBusy("");
+    }
+  }
+
+  async function fetchHoldings(mints = [], showBusy = true) {
+    if (showBusy) setHoldingBusy(true);
     try {
       const response = await api("/api/holdings", {
         method: "POST",
@@ -155,7 +171,7 @@ function App() {
       }
       setHoldings(await response.json());
     } finally {
-      setHoldingBusy(false);
+      if (showBusy) setHoldingBusy(false);
     }
   }
 
@@ -163,6 +179,7 @@ function App() {
     refresh();
     fetchHoldings();
     const timer = setInterval(refresh, 1000);
+    const holdingsTimer = setInterval(() => fetchHoldings([], false), 5000);
     const eventsUrl = `/api/events${token ? `?token=${encodeURIComponent(token)}` : ""}`;
     const stream = new EventSource(eventsUrl);
     stream.onmessage = (event) => {
@@ -170,6 +187,7 @@ function App() {
     };
     return () => {
       clearInterval(timer);
+      clearInterval(holdingsTimer);
       stream.close();
     };
   }, []);
@@ -179,6 +197,10 @@ function App() {
   );
   const newestEvents = useMemo(() => [...events].reverse(), [events]);
   const isRunning = status?.bot === "running";
+  const isStopping = status?.bot === "stopping";
+  const managedMints = useMemo(
+    () => new Set((status?.positions || []).map((item) => item.mint)), [status?.positions]
+  );
   const logUrl = (mint) => `/api/tokens/${encodeURIComponent(mint)}/logs${token ? `?token=${encodeURIComponent(token)}` : ""}`;
 
   return (
@@ -204,9 +226,9 @@ function App() {
           </NavbarItem>
           <NavbarItem>
             <Button size="sm" color="danger" variant="solid" startContent={<Pause size={14} />}
-              isLoading={commandBusy === "/api/bot/stop"} isDisabled={!isRunning || !!commandBusy}
+              isLoading={commandBusy === "/api/bot/stop"} isDisabled={!!commandBusy}
               onPress={() => command("/api/bot/stop")}>
-              停止并卖出
+              {isStopping ? "再次卖出持仓" : "停止并卖出"}
             </Button>
           </NavbarItem>
           <NavbarItem>
@@ -223,8 +245,9 @@ function App() {
       <main className="grid w-full gap-3 px-5 py-3 xl:px-8">
         <Card shadow="none" className="line-panel">
           <CardBody className="grid grid-cols-2 divide-x divide-divider p-0 md:grid-cols-4 xl:grid-cols-8">
-            <StatusItem icon={Activity} label="Bot" value={isRunning ? "运行中" : "已停止"}
-              color={isRunning ? "success" : "danger"} />
+            <StatusItem icon={Activity} label="Bot"
+              value={isRunning ? "运行中" : isStopping ? "停止卖出中" : "已停止"}
+              color={isRunning ? "success" : isStopping ? "warning" : "danger"} />
             <StatusItem icon={CircleDollarSign} label="余额"
               value={status?.balance_lamports == null ? "-" : `${(status.balance_lamports / 1e9).toFixed(6)} SOL`} />
             <StatusItem icon={DatabaseZap} label="Geyser Slot" value={status?.latest_slot} />
@@ -239,30 +262,10 @@ function App() {
           </CardBody>
         </Card>
 
-        <Card shadow="none" className="line-panel">
-          <CardBody className="flex min-h-14 flex-col justify-center gap-3 px-4 py-2.5 md:flex-row md:items-center">
-            <div className="flex shrink-0 items-center gap-2">
-              <Wallet size={16} className="text-default-500" />
-              <span className="text-small font-semibold">实时持仓</span>
-            </div>
-            {activeHoldings.length > 0 ? (
-              <ScrollShadow orientation="horizontal" className="flex min-w-0 flex-1 gap-2 py-1">
-                {activeHoldings.map((item) => (
-                  <Chip key={`${item.mint}-${item.token_program}`}
-                    color={item.error ? "danger" : "success"} variant="flat" className="shrink-0">
-                    {shortHash(item.mint)} · {item.error ? "ERR" : item.ui_amount_string}
-                  </Chip>
-                ))}
-              </ScrollShadow>
-            ) : <p className="min-w-0 flex-1 text-small text-default-400">暂无持仓</p>}
-            <Button size="sm" color="primary" variant="solid" startContent={!holdingBusy && <Search size={14} />}
-              isLoading={holdingBusy} onPress={() => fetchHoldings()}>
-              刷新持仓
-            </Button>
-          </CardBody>
-        </Card>
-
-        <Card shadow="none" className="line-panel min-w-0">
+        <Tabs aria-label="交易数据" variant="underlined" color="primary"
+          classNames={{ base: "trade-tabs", panel: "p-0" }}>
+          <Tab key="snipes" title={`狙击列表 (${tokens.length})`}>
+            <Card shadow="none" className="line-panel min-w-0">
           <PanelTitle title="狙击列表"
             description="成功签名计算 Slot 间隔，失败签名不会覆盖成功记录"
             endContent={<Chip size="sm" variant="bordered">{tokens.length} 条记录</Chip>} />
@@ -342,7 +345,65 @@ function App() {
               })}
             </TableBody>
           </Table>
-        </Card>
+            </Card>
+          </Tab>
+          <Tab key="holdings" title={`实时持仓 (${activeHoldings.length})`}>
+            <Card shadow="none" className="line-panel min-w-0">
+              <PanelTitle title="实时持仓"
+                description="每 5 秒读取钱包链上 Token 与 Token-2022 非零余额"
+                endContent={
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" variant="flat" startContent={!holdingBusy && <Search size={14} />}
+                      isLoading={holdingBusy} onPress={() => fetchHoldings()}>
+                      刷新
+                    </Button>
+                    <Tooltip content="筛选钱包中仍有 Pump bonding curve 的持仓并全部卖出">
+                      <Button size="sm" color="danger" variant="solid"
+                        isLoading={commandBusy === "/api/holdings/sell-all"}
+                        isDisabled={!activeHoldings.length || !!commandBusy}
+                        onPress={sellAllHoldings}>
+                        一键卖出全部 Token
+                      </Button>
+                    </Tooltip>
+                  </div>
+                } />
+              <Divider />
+              <Table removeWrapper aria-label="实时持仓" className="holdings-table-shell">
+                <TableHeader>
+                  <TableColumn>Token</TableColumn>
+                  <TableColumn>链上余额</TableColumn>
+                  <TableColumn>账户</TableColumn>
+                  <TableColumn>Token Program</TableColumn>
+                  <TableColumn>状态</TableColumn>
+                </TableHeader>
+                <TableBody emptyContent="暂无非零 Token 持仓" isLoading={holdingBusy}
+                  loadingContent={<Spinner label="正在读取链上持仓" />}>
+                  {activeHoldings.map((item) => (
+                    <TableRow key={`${item.token_account}-${item.mint}`}>
+                      <TableCell>
+                        <Link isExternal href={`https://gmgn.ai/sol/token/${item.mint}`}
+                          className="font-mono text-small">{shortHash(item.mint, 8, 6)}</Link>
+                      </TableCell>
+                      <TableCell><span className="font-mono tabular-nums">{item.ui_amount_string}</span></TableCell>
+                      <TableCell>
+                        <Tooltip content={item.token_account}>
+                          <span className="font-mono text-small">{shortHash(item.token_account, 8, 6)}</span>
+                        </Tooltip>
+                      </TableCell>
+                      <TableCell><span className="font-mono text-small">{shortHash(item.token_program, 8, 6)}</span></TableCell>
+                      <TableCell>
+                        <Chip size="sm" variant="flat"
+                          color={item.error ? "danger" : managedMints.has(item.mint) ? "success" : "primary"}>
+                          {item.error ? "读取失败" : managedMints.has(item.mint) ? "已跟踪" : "可恢复卖出"}
+                        </Chip>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </Card>
+          </Tab>
+        </Tabs>
 
         <Card shadow="none" className="line-panel min-w-0">
           <PanelTitle title="实时操作日志"

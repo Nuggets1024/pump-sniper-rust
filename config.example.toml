@@ -73,9 +73,9 @@ max_hold_ms = 8_000
 min_sol_out_lamports = 1
 
 [[follow]]
-address = "PUT_DEV_WALLET_HERE"
+address = "CRMZvMTmcGt9Vfpz7zCujQBADoEgZnpSzH9fB9MmWTib"
 min_sol = 0.1
-max_sol = 5.0
+max_sol = 7.0
 
 # scan 模式不能配置 [[follow]]；请删除上面的 follow 段，并开启 bot.trade。
 

@@ -62,7 +62,7 @@ pub async fn run(cfg: ShredCfg, output: mpsc::Sender<PumpEvent>) -> anyhow::Resu
             if !process_entries(message.slot, &message.entries, &output).await? {
                 return Ok(());
             }
-            if last_report.elapsed() >= Duration::from_secs(10) {
+            if last_report.elapsed() >= Duration::from_secs(30) {
                 let stats = crate::listen::feed_stats();
                 crate::telemetry::info(
                     "Shred统计",

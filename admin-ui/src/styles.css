@@ -30,6 +30,9 @@ button, a { -webkit-tap-highlight-color: transparent; }
   background: #fff;
 }
 
+.trade-tabs { margin-bottom: -4px; }
+.holdings-table-shell { min-height: 180px; }
+
 .snipe-table-shell {
   width: 100%;
   min-width: 0;

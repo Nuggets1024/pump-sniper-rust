@@ -54,6 +54,7 @@ pub async fn execute_sell(
             pos.token_amount,
             cfg.sell.min_sol_out_lamports,
             pick_protocol_fee(),
+            pda::user_volume_accumulator(&user),
             bonding_curve_v2,
             pick_buyback_fee_recipient(),
         ),

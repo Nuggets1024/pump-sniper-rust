@@ -77,6 +77,18 @@ pub struct PositionBook {
 }
 
 impl PositionBook {
+    /// 导入管理页从链上恢复的持仓；正在买卖/核账的本地状态优先。
+    pub fn import_open(&mut self, position: Position) {
+        let mint = position.mint;
+        match self.states.get_mut(&mint) {
+            Some(PositionState::Open(current)) => *current = position,
+            Some(_) => {}
+            None => {
+                self.states.insert(mint, PositionState::Open(position));
+            }
+        }
+    }
+
     pub fn begin_buy(&mut self, mint: Pubkey, creator: Pubkey) -> bool {
         if self.states.contains_key(&mint) {
             return false;
@@ -537,6 +549,15 @@ mod tests {
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].mint, mint);
         assert_eq!(book.request_sell(mint), SellDecision::Ignored);
+    }
+
+    #[test]
+    fn imports_wallet_position_after_restart() {
+        let mint = Pubkey::new_unique();
+        let recovered = position(mint);
+        let mut book = PositionBook::default();
+        book.import_open(recovered.clone());
+        assert_eq!(book.request_sell(mint), SellDecision::Start(recovered));
     }
 
     #[test]

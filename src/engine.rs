@@ -168,8 +168,13 @@ pub async fn run(
                         ),
                     );
                     if !spawn_sell(
-                        &cfg, &lander, &payer, position, current_hash(&blockhash_rx),
-                        &order_tx, &permits,
+                        &cfg,
+                        &lander,
+                        &payer,
+                        position,
+                        &blockhash_rx,
+                        &order_tx,
+                        &permits,
                     ) {
                         positions.fail_sell(mint);
                     }
@@ -258,15 +263,7 @@ fn handle_chain_event(
                 "执行卖出",
                 format!("[{}] 买入确认后执行此前挂起的退出", event.mint),
             );
-            if !spawn_sell(
-                cfg,
-                lander,
-                payer,
-                position,
-                current_hash(blockhash),
-                order_tx,
-                permits,
-            ) {
+            if !spawn_sell(cfg, lander, payer, position, blockhash, order_tx, permits) {
                 positions.fail_sell(event.mint);
             }
         }
@@ -355,15 +352,7 @@ fn handle_chain_event(
                         "执行卖出",
                         format!("[{mint}] 执行卖出，原因: DEV卖出，DEV: {seller}"),
                     );
-                    if !spawn_sell(
-                        cfg,
-                        lander,
-                        payer,
-                        position,
-                        current_hash(blockhash),
-                        order_tx,
-                        permits,
-                    ) {
+                    if !spawn_sell(cfg, lander, payer, position, blockhash, order_tx, permits) {
                         positions.fail_sell(mint);
                     }
                 }
@@ -431,15 +420,7 @@ fn handle_order_result(
                     if let SellDecision::Start(position) =
                         positions.confirm_buy(mint, signature, tokens)
                     {
-                        if !spawn_sell(
-                            cfg,
-                            lander,
-                            payer,
-                            position,
-                            current_hash(blockhash),
-                            order_tx,
-                            permits,
-                        ) {
+                        if !spawn_sell(cfg, lander, payer, position, blockhash, order_tx, permits) {
                             positions.fail_sell(mint);
                         }
                     }
@@ -556,32 +537,66 @@ fn handle_bot_command(
             *admin_stopped = false;
             crate::admin::set_bot_state(BotRunState::Stopping);
             crate::telemetry::warn("控制", "停止并卖出：已暂停新开仓");
-            for position in positions.claim_all_for_shutdown() {
-                let mint = position.mint;
-                journal.note(
-                    mint,
-                    "执行卖出",
-                    format!("[{mint}] 执行卖出，原因: 管理页停止"),
-                );
-                if !spawn_sell(
-                    cfg,
-                    lander,
-                    payer,
-                    position,
-                    current_hash(blockhash),
-                    order_tx,
-                    permits,
-                ) {
-                    positions.fail_sell(mint);
-                }
-            }
+            spawn_all_position_sells(
+                "管理页停止",
+                cfg,
+                lander,
+                payer,
+                journal,
+                positions,
+                blockhash,
+                order_tx,
+                permits,
+            );
             finish_admin_stop_if_flat(positions, admin_stopping, admin_stopped);
+        }
+        BotCommand::SellAll(recovered) => {
+            crate::telemetry::warn("控制", "管理页请求卖出全部实时持仓");
+            for position in recovered {
+                positions.import_open(position);
+            }
+            spawn_all_position_sells(
+                "管理页一键卖出全部",
+                cfg,
+                lander,
+                payer,
+                journal,
+                positions,
+                blockhash,
+                order_tx,
+                permits,
+            );
         }
         BotCommand::ForceStop => {
             *admin_stopping = false;
             *admin_stopped = true;
             crate::admin::set_bot_state(BotRunState::Stopped);
             crate::telemetry::warn("控制", "bot 已强制停止新开仓；已有后台监听仍保持运行");
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_all_position_sells(
+    reason: &str,
+    cfg: &Arc<AppConfig>,
+    lander: &Lander,
+    payer: &Arc<Keypair>,
+    journal: &TradeJournal,
+    positions: &mut PositionBook,
+    blockhash: &watch::Receiver<Hash>,
+    order_tx: &mpsc::Sender<OrderResult>,
+    permits: &Arc<Semaphore>,
+) {
+    for position in positions.claim_all_for_shutdown() {
+        let mint = position.mint;
+        journal.note(
+            mint,
+            "执行卖出",
+            format!("[{mint}] 执行卖出，原因: {reason}"),
+        );
+        if !spawn_sell(cfg, lander, payer, position, blockhash, order_tx, permits) {
+            positions.fail_sell(mint);
         }
     }
 }
@@ -651,22 +666,25 @@ fn spawn_sell(
     lander: &Lander,
     payer: &Arc<Keypair>,
     position: Position,
-    recent: Hash,
+    blockhash: &watch::Receiver<Hash>,
     order_tx: &mpsc::Sender<OrderResult>,
     permits: &Arc<Semaphore>,
 ) -> bool {
     let mint = position.mint;
-    let Ok(permit) = permits.clone().try_acquire_owned() else {
-        crate::telemetry::error("订单拥塞", format!("卖出并发已满 mint={mint}"));
-        return false;
-    };
     let cfg = cfg.clone();
     let lander = lander.clone();
     let payer = payer.clone();
     let order_tx = order_tx.clone();
+    let permits = permits.clone();
+    let blockhash = blockhash.clone();
     tokio::spawn(async move {
-        let _permit = permit;
-        let result = execute_sell(&cfg, &lander, &payer, &position, recent).await;
+        let result = match permits.acquire_owned().await {
+            Ok(_permit) => {
+                let recent = current_hash(&blockhash);
+                execute_sell(&cfg, &lander, &payer, &position, recent).await
+            }
+            Err(_) => Err(anyhow::anyhow!("卖出并发队列已关闭")),
+        };
         let _ = order_tx.send(OrderResult::Sell { mint, result }).await;
     });
     true

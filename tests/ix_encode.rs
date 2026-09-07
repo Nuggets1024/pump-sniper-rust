@@ -1,4 +1,4 @@
-use pump_sniper::constants::IX_BUY_EXACT_SOL_IN;
+use pump_sniper::constants::{IX_BUY_EXACT_SOL_IN, IX_SELL};
 use pump_sniper::pda;
 use pump_sniper::pump::ix::{buy_exact_sol_in, min_tokens_out, naive_min_tokens, BuyAccounts};
 use solana_sdk::pubkey::Pubkey;
@@ -45,4 +45,35 @@ fn min_out_uses_live_reserves_and_integer_slippage_bps() {
     // 10 * 1000 / (10 + 10) = 500，无滑点报价；10% 保护后为 450。
     assert_eq!(min_tokens_out(10, 10, 1000, 1000), Some(450));
     assert_eq!(min_tokens_out(10, 10, 1000, 10_000), None);
+}
+
+#[test]
+fn sell_places_cashback_accumulator_before_trailing_accounts() {
+    let mint = Pubkey::new_unique();
+    let user = Pubkey::new_unique();
+    let user_volume = pda::user_volume_accumulator(&user);
+    let curve_v2 = pda::bonding_curve_v2(&mint);
+    let buyback = Pubkey::new_unique();
+    let ix = pump_sniper::pump::ix::sell(
+        mint,
+        pda::bonding_curve(&mint),
+        Pubkey::new_unique(),
+        user,
+        Pubkey::new_unique(),
+        pda::creator_vault(&Pubkey::new_unique()),
+        spl_token_2022::ID,
+        1_000_000,
+        1,
+        Pubkey::new_unique(),
+        user_volume,
+        curve_v2,
+        buyback,
+    );
+
+    assert_eq!(&ix.data[..8], &IX_SELL);
+    assert_eq!(ix.accounts.len(), 17);
+    assert_eq!(ix.accounts[14].pubkey, user_volume);
+    assert!(ix.accounts[14].is_writable);
+    assert_eq!(ix.accounts[15].pubkey, curve_v2);
+    assert_eq!(ix.accounts[16].pubkey, buyback);
 }

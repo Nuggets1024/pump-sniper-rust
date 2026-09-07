@@ -55,6 +55,7 @@ pub struct AdminRuntime {
 pub enum BotCommand {
     Start,
     StopGracefully,
+    SellAll(Vec<crate::position::Position>),
     ForceStop,
 }
 
@@ -140,6 +141,19 @@ pub struct HoldingSnapshot {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct SellAllRequest {
+    pub holdings: Vec<SellHoldingRequest>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SellHoldingRequest {
+    pub mint: String,
+    pub token_program: String,
+    pub token_account: String,
+    pub amount: String,
+}
+
 #[derive(Default)]
 struct TokenStore {
     order: VecDeque<String>,
@@ -222,6 +236,7 @@ pub fn spawn_server(bind: SocketAddr) {
             .route("/api/config/reload", post(config_reload))
             .route("/api/bot/start", post(bot_start))
             .route("/api/bot/stop", post(bot_stop))
+            .route("/api/holdings/sell-all", post(holdings_sell_all))
             .route("/api/bot/force-stop", post(bot_force_stop))
             .route("/api/tokens", get(tokens))
             .route("/api/tokens/:mint/logs", get(token_logs))
@@ -658,6 +673,113 @@ async fn bot_stop(State(app): State<AdminApp>, headers: HeaderMap) -> Response {
 
 async fn bot_force_stop(State(app): State<AdminApp>, headers: HeaderMap) -> Response {
     command(&app, &headers, BotCommand::ForceStop).await
+}
+
+async fn holdings_sell_all(
+    State(app): State<AdminApp>,
+    headers: HeaderMap,
+    Json(request): Json<SellAllRequest>,
+) -> Response {
+    if let Err(response) = authorize(&app, &headers, None) {
+        return response;
+    }
+    let mut candidates = Vec::new();
+    for holding in request.holdings {
+        let (Ok(mint), Ok(token_program), Ok(user_token), Ok(token_amount)) = (
+            Pubkey::from_str(&holding.mint),
+            Pubkey::from_str(&holding.token_program),
+            Pubkey::from_str(&holding.token_account),
+            holding.amount.parse::<u64>(),
+        ) else {
+            continue;
+        };
+        if token_amount == 0 || !matches!(token_program, spl_token::ID | spl_token_2022::ID) {
+            continue;
+        }
+        candidates.push((
+            mint,
+            token_program,
+            user_token,
+            token_amount,
+            crate::pda::bonding_curve(&mint),
+        ));
+    }
+    if candidates.is_empty() {
+        return api_error(StatusCode::BAD_REQUEST, "没有可提交的非零 Token 持仓");
+    }
+
+    let rpc = crate::rpc::nonblocking(
+        app.inner.rpc_url.clone(),
+        std::time::Duration::from_secs(15),
+        CommitmentConfig::processed(),
+    );
+    let curves = candidates
+        .iter()
+        .map(|candidate| candidate.4)
+        .collect::<Vec<_>>();
+    let accounts = match rpc.get_multiple_accounts(&curves).await {
+        Ok(accounts) => accounts,
+        Err(error) => {
+            return api_error(
+                StatusCode::BAD_GATEWAY,
+                format!("读取 Pump 曲线账户失败: {error}"),
+            )
+        }
+    };
+    let mut positions = Vec::new();
+    for ((mint, token_program, user_token, token_amount, bonding_curve), account) in
+        candidates.into_iter().zip(accounts)
+    {
+        let Some(account) = account else { continue };
+        if account.owner != *crate::constants::PUMP_PROGRAM_ID {
+            continue;
+        }
+        let Some(creator) = bonding_curve_creator(&account.data) else {
+            continue;
+        };
+        positions.push(crate::position::Position {
+            mint,
+            bonding_curve,
+            creator,
+            token_program,
+            user_token,
+            token_amount,
+            opened: std::time::Instant::now(),
+            buy_sig: String::new(),
+            buy_sigs: Vec::new(),
+        });
+    }
+    if positions.is_empty() {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "当前非零余额中没有仍可通过 Pump bonding curve 卖出的 Token",
+        );
+    }
+    let count = positions.len();
+    match app
+        .inner
+        .commands
+        .send(BotCommand::SellAll(positions))
+        .await
+    {
+        Ok(()) => Json(serde_json::json!({ "ok": true, "count": count })).into_response(),
+        Err(_) => api_error(StatusCode::SERVICE_UNAVAILABLE, "bot 控制通道已关闭"),
+    }
+}
+
+fn bonding_curve_creator(data: &[u8]) -> Option<Pubkey> {
+    const DISCRIMINATOR: [u8; 8] = [23, 183, 248, 55, 96, 216, 172, 96];
+    const COMPLETE_OFFSET: usize = 8 + 5 * 8;
+    const CREATOR_OFFSET: usize = 8 + 5 * 8 + 1;
+    if data.get(..8)? != DISCRIMINATOR
+        || data.get(COMPLETE_OFFSET).copied()? != 0
+        || data.len() < CREATOR_OFFSET + 32
+    {
+        return None;
+    }
+    Some(Pubkey::new_from_array(
+        data[CREATOR_OFFSET..CREATOR_OFFSET + 32].try_into().ok()?,
+    ))
 }
 
 async fn tokens(State(app): State<AdminApp>, headers: HeaderMap) -> Response {
@@ -1102,6 +1224,20 @@ mod tests {
         assert_eq!(holding.amount, 176_595_210_438);
         assert_eq!(holding.decimals, Some(6));
         assert_eq!(holding.ui_amount_string.as_deref(), Some("176595.210438"));
+    }
+
+    #[test]
+    fn parses_creator_from_current_bonding_curve_layout() {
+        let creator = Pubkey::new_unique();
+        let mut data = vec![0u8; 115];
+        data[..8].copy_from_slice(&[23, 183, 248, 55, 96, 216, 172, 96]);
+        data[49..81].copy_from_slice(creator.as_ref());
+        assert_eq!(bonding_curve_creator(&data), Some(creator));
+        data[48] = 1;
+        assert_eq!(bonding_curve_creator(&data), None);
+        data[48] = 0;
+        data[0] = 0;
+        assert_eq!(bonding_curve_creator(&data), None);
     }
 
     fn summary_with_submission(sniper_hash: Option<&str>, candidates: &[&str]) -> TokenSummary {
